@@ -1,0 +1,2 @@
+bucket = "tfstate-DEINE-PROJECT-ID"
+prefix = "cloudrun-lab"
