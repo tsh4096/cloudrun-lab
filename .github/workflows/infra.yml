@@ -1,0 +1,132 @@
+name: Infrastruktur
+
+# Diese Datei gehoert nach .github/workflows/infra.yml im Wurzelverzeichnis
+# des Repositories, nicht in den infra-Ordner.
+
+on:
+  # Bei jedem Pull Request, der Infrastruktur anfasst: nur pruefen und planen.
+  pull_request:
+    paths: ["infra/**", ".github/workflows/infra.yml"]
+  # Nach dem Merge auf main: ausfuehren, aber erst nach Freigabe.
+  push:
+    branches: [main]
+    paths: ["infra/**", ".github/workflows/infra.yml"]
+
+# Rechte des automatisch erzeugten Workflow-Tokens, so eng wie moeglich.
+# Standard waere grosszuegiger. Das ist die Lehre aus dem
+# Prompt-Injection-Vorfall: erst zuschnueren, dann einzeln oeffnen.
+permissions:
+  contents: read
+  id-token: write        # ZWINGEND: erlaubt GitHub, das OIDC-Token auszustellen
+  pull-requests: write   # damit der Plan als Kommentar an den PR kann
+
+env:
+  TF_VERSION: "1.9.8"
+
+# Zwei schnelle Pushes hintereinander brechen den ersten Lauf ab.
+# Spart Wartezeit und Rechnerminuten.
+concurrency:
+  group: infra-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------
+  # Job 1: pruefen und planen. Aendert nichts an der Infrastruktur.
+  # ---------------------------------------------------------------
+  plan:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      # Alle Actions sind auf einen Commit-SHA gepinnt, nicht auf einen Tag.
+      # Ein Tag kann vom Maintainer jederzeit auf anderen Code umgehaengt
+      # werden, ein SHA nicht. Der Kommentar dahinter sagt, welche Version
+      # das ist, denn der SHA allein sagt keinem Menschen etwas.
+      # Ermittelt am 09.09.2026, Aktualisierung uebernimmt Dependabot.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # Tauscht GitHubs OIDC-Token gegen ein kurzlebiges Google-Token.
+      # Kein Schluessel, keine Datei, nichts, was ablaufen oder
+      # gestohlen werden koennte.
+      - uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      # Die Backend-Werte kommen von aussen, weil der backend-Block
+      # in versions.tf keine Variablen kennt.
+      - name: Init
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="prefix=cloudrun-lab"
+
+      # Die billigen Gates zuerst. Wer hier rot ist, muss gar nicht planen.
+      - run: terraform fmt -check -recursive
+      - run: terraform validate
+
+      # -input=false verhindert, dass Terraform auf eine Eingabe wartet
+      # und der Lauf dadurch haengen bleibt.
+      # -out schreibt den Plan in eine Datei, damit spaeter exakt dieser
+      # Plan ausgefuehrt wird und nicht ein neu berechneter.
+      - name: Plan
+        run: |
+          terraform plan -input=false -out=tfplan \
+            -var="project_id=${{ vars.GCP_PROJECT_ID }}" \
+            -var="region=${{ vars.GCP_REGION }}" \
+            -var="github_owner=${{ github.repository_owner }}" \
+            -var="github_repo=${{ github.event.repository.name }}"
+
+      # Die Plandatei wird aufbewahrt und im naechsten Job unveraendert
+      # ausgefuehrt. Damit ist ausgeschlossen, dass zwischen Ansicht
+      # und Ausfuehrung etwas anderes passiert.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tfplan
+          path: infra/tfplan
+          retention-days: 5
+
+  # ---------------------------------------------------------------
+  # Job 2: ausfuehren. Nur nach dem Merge auf main, und nur nachdem
+  # ein Mensch in der Umgebung "production" freigegeben hat.
+  # ---------------------------------------------------------------
+  apply:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [plan]
+    runs-on: ubuntu-latest
+    environment: production   # loest die Freigabe-Anfrage aus
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Init
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="prefix=cloudrun-lab"
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: tfplan
+          path: infra
+
+      # Genau die geprueften Plandatei ausfuehren, nichts neu berechnen.
+      # Hat sich der State seit dem Plan geaendert, bricht Terraform hier
+      # ab. Das ist gewollt und keine Stoerung.
+      - run: terraform apply -input=false -auto-approve tfplan

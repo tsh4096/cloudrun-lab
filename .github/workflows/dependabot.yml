@@ -1,0 +1,13 @@
+# Gehoert nach .github/dependabot.yml
+#
+# Ein gepinnter Commit-SHA bekommt keine Sicherheitsupdates mehr.
+# Dependabot zieht sie nach und oeffnet dafuer Pull Requests,
+# die du wie jede andere Aenderung pruefst. Pinnen ohne diese
+# Datei ist die halbe Loesung.
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
