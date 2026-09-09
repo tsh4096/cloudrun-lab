@@ -44,7 +44,7 @@ jobs:
       # werden, ein SHA nicht. Der Kommentar dahinter sagt, welche Version
       # das ist, denn der SHA allein sagt keinem Menschen etwas.
       # Ermittelt am 09.09.2026, Aktualisierung uebernimmt Dependabot.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Tauscht GitHubs OIDC-Token gegen ein kurzlebiges Google-Token.
       # Kein Schluessel, keine Datei, nichts, was ablaufen oder
@@ -104,7 +104,7 @@ jobs:
       run:
         working-directory: infra
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
         with:
